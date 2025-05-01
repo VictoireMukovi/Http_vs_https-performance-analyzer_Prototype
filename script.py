@@ -1,9 +1,10 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import flet as ft
 import requests
 import time
 import csv
 import psutil
+
+resultats = []
 
 def mesurer_performance(url, use_https, num_requetes):
     protocol = "https" if use_https else "http"
@@ -19,10 +20,8 @@ def mesurer_performance(url, use_https, num_requetes):
             start_time = time.time()
             response = requests.get(full_url)
             end_time = time.time()
-
             latence = end_time - start_time
             taille = len(response.content)
-
             temps_total += latence
             taille_totale += taille
         except Exception as e:
@@ -30,64 +29,89 @@ def mesurer_performance(url, use_https, num_requetes):
 
     end_cpu = psutil.cpu_percent(interval=None)
     latence_moyenne = temps_total / num_requetes
-    debit = taille_totale / temps_total  # en octets/sec
+    debit = taille_totale / temps_total
     cpu = (start_cpu + end_cpu) / 2
 
     return latence_moyenne, debit, taille_totale, cpu
 
-def lancer_test():
-    url = url_entry.get()
-    use_https = protocol_var.get() == "HTTPS"
-    try:
-        num = int(nb_requetes_entry.get())
-    except:
-        messagebox.showerror("Erreur", "Nombre de requêtes invalide.")
-        return
+def main(page: ft.Page):
+    page.title = "Test HTTP/HTTPS - Victoire"
+    page.padding = 20
+    page.scroll = ft.ScrollMode.AUTO
 
-    latence, debit, taille, cpu = mesurer_performance(url, use_https, num)
+    url = ft.TextField(label="Entrez l'URL (ex: localhost/test.html)", expand=True)
+    nb_requetes = ft.TextField(label="Nombre de requêtes", value="10", width=200)
+    protocol = ft.Dropdown(
+        label="Protocole",
+        width=200,
+        options=[
+            ft.dropdown.Option("HTTP"),
+            ft.dropdown.Option("HTTPS"),
+        ],
+        value="HTTP"
+    )
 
-    result_label.config(text=f"Latence moyenne : {latence:.3f} s\nDébit : {debit/1024:.2f} Ko/s\nTaille totale : {taille} octets\nCPU : {cpu:.1f} %")
-    save_button.config(state=tk.NORMAL)
-    result_data.clear()
-    result_data.extend([["Latence moyenne (s)", latence],
-                        ["Débit (Ko/s)", debit / 1024],
-                        ["Taille totale (octets)", taille],
-                        ["Utilisation CPU (%)", cpu]])
+    result_box = ft.Text("Résultats affichés ici", size=16)
 
-def exporter_csv():
-    fichier = filedialog.asksaveasfilename(defaultextension=".csv")
-    if fichier:
-        with open(fichier, "w", newline='') as f:
+    def lancer_test(e):
+        try:
+            nb = int(nb_requetes.value)
+        except:
+            result_box.value = "⚠️ Veuillez entrer un nombre valide de requêtes."
+            page.update()
+            return
+
+        page.splash = ft.ProgressRing()
+        page.update()
+
+        latence, debit, taille, cpu = mesurer_performance(url.value, protocol.value == "HTTPS", nb)
+
+        result_box.value = f"""
+✅ Test terminé :
+- Latence moyenne : {latence:.3f} s
+- Débit : {debit/1024:.2f} Ko/s
+- Taille totale : {taille} octets
+- CPU : {cpu:.1f} %
+"""
+        result_box.color = ft.colors.GREEN
+        resultats.clear()
+        resultats.extend([
+            ["Latence moyenne (s)", latence],
+            ["Débit (Ko/s)", debit / 1024],
+            ["Taille totale (octets)", taille],
+            ["Utilisation CPU (%)", cpu]
+        ])
+
+        page.splash = None
+        page.update()
+
+    def exporter_csv(e):
+        if not resultats:
+            result_box.value = "⚠️ Aucun résultat à exporter."
+            result_box.color = ft.colors.RED
+            page.update()
+            return
+
+        with open("resultats_test.csv", "w", newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["Mesure", "Valeur"])
-            writer.writerows(result_data)
-        messagebox.showinfo("Exporté", "Résultats exportés avec succès.")
+            writer.writerows(resultats)
+        result_box.value = "📁 Résultats exportés dans 'resultats_test.csv'."
+        result_box.color = ft.colors.BLUE
+        page.update()
 
-# Interface graphique
-fenetre = tk.Tk()
-fenetre.title("Test HTTP/HTTPS")
+    page.add(
+        ft.Column([
+            ft.Text("📡 Testeur de performances HTTP vs HTTPS", size=22, weight="bold"),
+            ft.Row([url]),
+            ft.Row([protocol, nb_requetes]),
+            ft.Row([
+                ft.ElevatedButton("▶️ Lancer le test", on_click=lancer_test),
+                ft.ElevatedButton("💾 Exporter CSV", on_click=exporter_csv, bgcolor=ft.colors.BLUE_200),
+            ]),
+            ft.Divider(),
+            result_box,
+        ], spacing=20)
+    )
 
-tk.Label(fenetre, text="URL :").grid(row=0, column=0)
-url_entry = tk.Entry(fenetre, width=40)
-url_entry.grid(row=0, column=1, columnspan=2)
-
-tk.Label(fenetre, text="Protocole :").grid(row=1, column=0)
-protocol_var = tk.StringVar(value="HTTP")
-ttk.OptionMenu(fenetre, protocol_var, "HTTP", "HTTP", "HTTPS").grid(row=1, column=1)
-
-tk.Label(fenetre, text="Nb de requêtes :").grid(row=2, column=0)
-nb_requetes_entry = tk.Entry(fenetre)
-nb_requetes_entry.insert(0, "10")
-nb_requetes_entry.grid(row=2, column=1)
-
-tk.Button(fenetre, text="Lancer le test", command=lancer_test).grid(row=3, column=0, columnspan=3, pady=10)
-
-result_label = tk.Label(fenetre, text="Résultats affichés ici")
-result_label.grid(row=4, column=0, columnspan=3)
-
-save_button = tk.Button(fenetre, text="Exporter en CSV", command=exporter_csv, state=tk.DISABLED)
-save_button.grid(row=5, column=0, columnspan=3, pady=10)
-
-result_data = []
-
-fenetre.mainloop()
+ft.app(target=main)

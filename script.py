@@ -14,6 +14,7 @@ def main(page: ft.Page):
 
     url_field = ft.TextField(label="URL", expand=True)
     nb_field = ft.TextField(label="Nombre de requêtes", value="10", width=150)
+    size_field = ft.TextField(label="Tailles fichiers (Ko, ex: 100,500,1000)", value="100,500,1000", expand=True)
 
     result_table_http = ft.DataTable(
         columns=[
@@ -23,6 +24,7 @@ def main(page: ft.Page):
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
             ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
             ft.DataColumn(label=ft.Text("CPU (%)")),
+            ft.DataColumn(label=ft.Text("Taille Cible (Ko)"))
         ],
         rows=[]
     )
@@ -35,6 +37,7 @@ def main(page: ft.Page):
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
             ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
             ft.DataColumn(label=ft.Text("CPU (%)")),
+            ft.DataColumn(label=ft.Text("Taille Cible (Ko)"))
         ],
         rows=[]
     )
@@ -74,6 +77,12 @@ def main(page: ft.Page):
         except:
             return
 
+        try:
+            tailles = [int(t.strip()) * 1024 for t in size_field.value.split(",") if t.strip().isdigit()]
+        except:
+            show_dialog("Erreur dans la saisie des tailles.")
+            return
+
         url = url_field.value.strip()
 
         btn_test.disabled = True
@@ -81,8 +90,12 @@ def main(page: ft.Page):
         progress_ring.visible = True
         page.update()
 
-        resultats_http = mesurer_performance(url, use_https=False, num_requetes=nb)
-        resultats_https = mesurer_performance(url, use_https=True, num_requetes=nb)
+        resultats_http = []
+        resultats_https = []
+
+        for taille in tailles:
+            resultats_http += mesurer_performance(url, use_https=False, num_requetes=nb, taille_fichier=taille)
+            resultats_https += mesurer_performance(url, use_https=True, num_requetes=nb, taille_fichier=taille)
 
         historique_http.clear()
         historique_https.clear()
@@ -96,7 +109,8 @@ def main(page: ft.Page):
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
                 ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
-                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
+                ft.DataCell(ft.Text(f"{r['cpu']:.1f}")),
+                ft.DataCell(ft.Text(f"{r['taille_cible']/1024:.2f}")),
             ]))
 
         for r in resultats_https:
@@ -106,7 +120,8 @@ def main(page: ft.Page):
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
                 ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
-                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
+                ft.DataCell(ft.Text(f"{r['cpu']:.1f}")),
+                ft.DataCell(ft.Text(f"{r['taille_cible']/1024:.2f}")),
             ]))
 
         btn_test.disabled = False
@@ -125,11 +140,11 @@ def main(page: ft.Page):
 
         with open("resultats_http_https.csv", "w", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["Protocole", "Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)"])
+            writer.writerow(["Protocole", "Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)", "Taille Cible (Ko)"])
             for r in historique_http:
-                writer.writerow(["HTTP", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
+                writer.writerow(["HTTP", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"], r["taille_cible"]/1024])
             for r in historique_https:
-                writer.writerow(["HTTPS", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
+                writer.writerow(["HTTPS", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"], r["taille_cible"]/1024])
 
         btn_test.disabled = False
         btn_csv.disabled = False
@@ -143,7 +158,7 @@ def main(page: ft.Page):
         ft.Column([
             ft.Text("🧪 Analyse comparative HTTP vs HTTPS", size=22, weight="bold"),
             ft.Row([url_field]),
-            ft.Row([nb_field]),
+            ft.Row([nb_field, size_field]),
             ft.Row([btn_test, btn_csv, progress_ring]),
             ft.Divider(),
             ft.Text("Résultats HTTP", weight="bold"),
@@ -154,10 +169,10 @@ def main(page: ft.Page):
         ])
     )
 
-def mesurer_performance(url, use_https, num_requetes):
+def mesurer_performance(url, use_https, num_requetes, taille_fichier):
     protocol = "https" if use_https else "http"
-    full_url = url.replace("http://", "").replace("https://", "")
-    full_url = f"{protocol}://{full_url}"
+    base_url = url.replace("http://", "").replace("https://", "")
+    full_url = f"{protocol}://{base_url}"
 
     results = []
 
@@ -166,7 +181,10 @@ def mesurer_performance(url, use_https, num_requetes):
             start_cpu = psutil.cpu_percent(interval=None)
             start_time = time.time()
 
-            response = requests.get(full_url)
+            # Simule le paramètre de taille si pris en charge par le backend
+            test_url = f"{full_url}?size={taille_fichier}"
+
+            response = requests.get(test_url)
 
             end_time = time.time()
             end_cpu = psutil.cpu_percent(interval=None)
@@ -181,7 +199,8 @@ def mesurer_performance(url, use_https, num_requetes):
                 "latence": latence,
                 "taille": taille,
                 "debit": debit,
-                "cpu": cpu
+                "cpu": cpu,
+                "taille_cible": taille_fichier  # pour suivi
             })
 
         except Exception:
@@ -190,7 +209,8 @@ def mesurer_performance(url, use_https, num_requetes):
                 "latence": 0,
                 "taille": 0,
                 "debit": 0,
-                "cpu": 0
+                "cpu": 0,
+                "taille_cible": taille_fichier
             })
 
     return results

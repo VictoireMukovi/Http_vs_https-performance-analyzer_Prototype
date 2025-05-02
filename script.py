@@ -2,7 +2,6 @@ import flet as ft
 import requests
 import time
 import csv
-import psutil
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
@@ -20,11 +19,9 @@ def main(page: ft.Page):
     result_table_http = ft.DataTable(
         columns=[
             ft.DataColumn(label=ft.Text("Protocole")),
-            ft.DataColumn(label=ft.Text("Requête")),
             ft.DataColumn(label=ft.Text("Latence (ms)")),
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
             ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
-            ft.DataColumn(label=ft.Text("CPU (%)")),
         ],
         rows=[]
     )
@@ -32,11 +29,9 @@ def main(page: ft.Page):
     result_table_https = ft.DataTable(
         columns=[
             ft.DataColumn(label=ft.Text("Protocole")),
-            ft.DataColumn(label=ft.Text("Requête")),
             ft.DataColumn(label=ft.Text("Latence (ms)")),
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
             ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
-            ft.DataColumn(label=ft.Text("CPU (%)")),
         ],
         rows=[]
     )
@@ -73,7 +68,8 @@ def main(page: ft.Page):
 
         try:
             nb = int(nb_field.value)
-        except:
+        except ValueError:
+            show_dialog("❌ Veuillez entrer un nombre valide.")
             return
 
         url = url_field.value.strip()
@@ -94,21 +90,17 @@ def main(page: ft.Page):
         for r in resultats_http:
             result_table_http.rows.append(ft.DataRow(cells=[
                 ft.DataCell(ft.Text("HTTP")),
-                ft.DataCell(ft.Text(str(r["requete"]))),
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
                 ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
-                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
             ]))
 
         for r in resultats_https:
             result_table_https.rows.append(ft.DataRow(cells=[
                 ft.DataCell(ft.Text("HTTPS")),
-                ft.DataCell(ft.Text(str(r["requete"]))),
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
                 ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
-                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
             ]))
 
         btn_test.disabled = False
@@ -118,6 +110,7 @@ def main(page: ft.Page):
 
     def exporter_csv(e):
         if not historique_http and not historique_https:
+            show_dialog("Aucun résultat à exporter.")
             return
 
         btn_test.disabled = True
@@ -127,11 +120,11 @@ def main(page: ft.Page):
 
         with open("resultats_http_https.csv", "w", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["Protocole", "Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)"])
+            writer.writerow(["Protocole", "Latence (s)", "Taille (octets)", "Débit (o/s)"])
             for r in historique_http:
-                writer.writerow(["HTTP", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
+                writer.writerow(["HTTP", r["latence"], r["taille"], r["debit"]])
             for r in historique_https:
-                writer.writerow(["HTTPS", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
+                writer.writerow(["HTTPS", r["latence"], r["taille"], r["debit"]])
 
         btn_test.disabled = False
         btn_csv.disabled = False
@@ -164,45 +157,34 @@ def mesurer_performance(url, use_https, num_requetes):
     results = []
     for i in range(1, num_requetes + 1):
         try:
-            start_cpu = psutil.cpu_percent(interval=None)
             start_time = time.time()
+            response = requests.get(full_url, timeout=10)
+            total_size = len(response.content)
 
-            # Effectuer la requête principale pour récupérer la page
-            response = requests.get(full_url)
-
-            # Récupérer les ressources liées (images, CSS, JS)
+            # Collecter et télécharger toutes les ressources
             resources = collect_resources(response.text, full_url)
-            total_size = len(response.content)  # Taille de la page principale
-
             for resource_url in resources:
                 try:
-                    res = requests.get(resource_url)
-                    total_size += len(res.content)  # Ajouter la taille de chaque ressource
-                except Exception as e:
-                    print(f"Erreur lors du chargement de la ressource {resource_url}: {e}")
+                    res = requests.get(resource_url, timeout=5)
+                    total_size += len(res.content)
+                except requests.RequestException:
+                    pass  # Ignore erreurs pour les ressources
 
             end_time = time.time()
-            end_cpu = psutil.cpu_percent(interval=None)
-
             latence = end_time - start_time
-            cpu = (start_cpu + end_cpu) / 2
             debit = total_size / latence if latence > 0 else 0
 
             results.append({
-                "requete": i,
                 "latence": latence,
                 "taille": total_size,
                 "debit": debit,
-                "cpu": cpu
             })
 
-        except Exception:
+        except requests.RequestException:
             results.append({
-                "requete": i,
                 "latence": 0,
                 "taille": 0,
                 "debit": 0,
-                "cpu": 0
             })
 
     return results
@@ -210,14 +192,11 @@ def mesurer_performance(url, use_https, num_requetes):
 def collect_resources(html_content, base_url):
     soup = BeautifulSoup(html_content, "html.parser")
     resources = []
-
-    # Rechercher les liens vers les ressources dans le HTML
     for tag in soup.find_all(["img", "script", "link"]):
         src = tag.get("src") or tag.get("href")
         if src:
             resource_url = urljoin(base_url, src)
             resources.append(resource_url)
-
     return resources
 
 ft.app(target=main)

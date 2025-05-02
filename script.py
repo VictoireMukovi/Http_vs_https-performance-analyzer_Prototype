@@ -3,6 +3,8 @@ import requests
 import time
 import csv
 import psutil
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
 
 historique_http = []
 historique_https = []
@@ -14,7 +16,6 @@ def main(page: ft.Page):
 
     url_field = ft.TextField(label="URL", expand=True)
     nb_field = ft.TextField(label="Nombre de requêtes", value="10", width=150)
-    size_field = ft.TextField(label="Tailles fichiers (Ko, ex: 100,500,1000)", value="100,500,1000", expand=True)
 
     result_table_http = ft.DataTable(
         columns=[
@@ -24,7 +25,6 @@ def main(page: ft.Page):
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
             ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
             ft.DataColumn(label=ft.Text("CPU (%)")),
-            ft.DataColumn(label=ft.Text("Taille Cible (Ko)"))
         ],
         rows=[]
     )
@@ -37,7 +37,6 @@ def main(page: ft.Page):
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
             ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
             ft.DataColumn(label=ft.Text("CPU (%)")),
-            ft.DataColumn(label=ft.Text("Taille Cible (Ko)"))
         ],
         rows=[]
     )
@@ -77,12 +76,6 @@ def main(page: ft.Page):
         except:
             return
 
-        try:
-            tailles = [int(t.strip()) * 1024 for t in size_field.value.split(",") if t.strip().isdigit()]
-        except:
-            show_dialog("Erreur dans la saisie des tailles.")
-            return
-
         url = url_field.value.strip()
 
         btn_test.disabled = True
@@ -90,12 +83,8 @@ def main(page: ft.Page):
         progress_ring.visible = True
         page.update()
 
-        resultats_http = []
-        resultats_https = []
-
-        for taille in tailles:
-            resultats_http += mesurer_performance(url, use_https=False, num_requetes=nb, taille_fichier=taille)
-            resultats_https += mesurer_performance(url, use_https=True, num_requetes=nb, taille_fichier=taille)
+        resultats_http = mesurer_performance(url, use_https=False, num_requetes=nb)
+        resultats_https = mesurer_performance(url, use_https=True, num_requetes=nb)
 
         historique_http.clear()
         historique_https.clear()
@@ -109,8 +98,7 @@ def main(page: ft.Page):
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
                 ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
-                ft.DataCell(ft.Text(f"{r['cpu']:.1f}")),
-                ft.DataCell(ft.Text(f"{r['taille_cible']/1024:.2f}")),
+                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
             ]))
 
         for r in resultats_https:
@@ -120,8 +108,7 @@ def main(page: ft.Page):
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
                 ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
-                ft.DataCell(ft.Text(f"{r['cpu']:.1f}")),
-                ft.DataCell(ft.Text(f"{r['taille_cible']/1024:.2f}")),
+                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
             ]))
 
         btn_test.disabled = False
@@ -140,11 +127,11 @@ def main(page: ft.Page):
 
         with open("resultats_http_https.csv", "w", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["Protocole", "Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)", "Taille Cible (Ko)"])
+            writer.writerow(["Protocole", "Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)"])
             for r in historique_http:
-                writer.writerow(["HTTP", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"], r["taille_cible"]/1024])
+                writer.writerow(["HTTP", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
             for r in historique_https:
-                writer.writerow(["HTTPS", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"], r["taille_cible"]/1024])
+                writer.writerow(["HTTPS", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
 
         btn_test.disabled = False
         btn_csv.disabled = False
@@ -158,7 +145,7 @@ def main(page: ft.Page):
         ft.Column([
             ft.Text("🧪 Analyse comparative HTTP vs HTTPS", size=22, weight="bold"),
             ft.Row([url_field]),
-            ft.Row([nb_field, size_field]),
+            ft.Row([nb_field]),
             ft.Row([btn_test, btn_csv, progress_ring]),
             ft.Divider(),
             ft.Text("Résultats HTTP", weight="bold"),
@@ -169,38 +156,44 @@ def main(page: ft.Page):
         ])
     )
 
-def mesurer_performance(url, use_https, num_requetes, taille_fichier):
+def mesurer_performance(url, use_https, num_requetes):
     protocol = "https" if use_https else "http"
-    base_url = url.replace("http://", "").replace("https://", "")
-    full_url = f"{protocol}://{base_url}"
+    full_url = url.replace("http://", "").replace("https://", "")
+    full_url = f"{protocol}://{full_url}"
 
     results = []
-
     for i in range(1, num_requetes + 1):
         try:
             start_cpu = psutil.cpu_percent(interval=None)
             start_time = time.time()
 
-            # Simule le paramètre de taille si pris en charge par le backend
-            test_url = f"{full_url}?size={taille_fichier}"
+            # Effectuer la requête principale pour récupérer la page
+            response = requests.get(full_url)
 
-            response = requests.get(test_url)
+            # Récupérer les ressources liées (images, CSS, JS)
+            resources = collect_resources(response.text, full_url)
+            total_size = len(response.content)  # Taille de la page principale
+
+            for resource_url in resources:
+                try:
+                    res = requests.get(resource_url)
+                    total_size += len(res.content)  # Ajouter la taille de chaque ressource
+                except Exception as e:
+                    print(f"Erreur lors du chargement de la ressource {resource_url}: {e}")
 
             end_time = time.time()
             end_cpu = psutil.cpu_percent(interval=None)
 
             latence = end_time - start_time
-            taille = len(response.content)
             cpu = (start_cpu + end_cpu) / 2
-            debit = taille / latence if latence > 0 else 0
+            debit = total_size / latence if latence > 0 else 0
 
             results.append({
                 "requete": i,
                 "latence": latence,
-                "taille": taille,
+                "taille": total_size,
                 "debit": debit,
-                "cpu": cpu,
-                "taille_cible": taille_fichier  # pour suivi
+                "cpu": cpu
             })
 
         except Exception:
@@ -209,10 +202,22 @@ def mesurer_performance(url, use_https, num_requetes, taille_fichier):
                 "latence": 0,
                 "taille": 0,
                 "debit": 0,
-                "cpu": 0,
-                "taille_cible": taille_fichier
+                "cpu": 0
             })
 
     return results
+
+def collect_resources(html_content, base_url):
+    soup = BeautifulSoup(html_content, "html.parser")
+    resources = []
+
+    # Rechercher les liens vers les ressources dans le HTML
+    for tag in soup.find_all(["img", "script", "link"]):
+        src = tag.get("src") or tag.get("href")
+        if src:
+            resource_url = urljoin(base_url, src)
+            resources.append(resource_url)
+
+    return resources
 
 ft.app(target=main)

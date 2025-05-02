@@ -4,7 +4,8 @@ import time
 import csv
 import psutil
 
-historique = []
+historique_http = []
+historique_https = []
 
 def main(page: ft.Page):
     page.title = "Analyse HTTP/HTTPS - Victoire"
@@ -12,15 +13,23 @@ def main(page: ft.Page):
     page.padding = 20
 
     url_field = ft.TextField(label="URL", expand=True)
-    protocol_field = ft.Dropdown(
-        label="Protocole", width=150,
-        options=[ft.dropdown.Option("HTTP"), ft.dropdown.Option("HTTPS")],
-        value="HTTP"
-    )
     nb_field = ft.TextField(label="Nombre de requêtes", value="10", width=150)
 
-    result_table = ft.DataTable(
+    result_table_http = ft.DataTable(
         columns=[
+            ft.DataColumn(label=ft.Text("Protocole")),
+            ft.DataColumn(label=ft.Text("Requête")),
+            ft.DataColumn(label=ft.Text("Latence (ms)")),
+            ft.DataColumn(label=ft.Text("Taille (Ko)")),
+            ft.DataColumn(label=ft.Text("Débit (Ko/s)")),
+            ft.DataColumn(label=ft.Text("CPU (%)")),
+        ],
+        rows=[]
+    )
+
+    result_table_https = ft.DataTable(
+        columns=[
+            ft.DataColumn(label=ft.Text("Protocole")),
             ft.DataColumn(label=ft.Text("Requête")),
             ft.DataColumn(label=ft.Text("Latence (ms)")),
             ft.DataColumn(label=ft.Text("Taille (Ko)")),
@@ -32,7 +41,6 @@ def main(page: ft.Page):
 
     progress_ring = ft.ProgressRing(visible=False)
 
-    # Dialog général
     alert_dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text("✅ Terminé", weight="bold"),
@@ -41,32 +49,31 @@ def main(page: ft.Page):
         actions_alignment="end",
     )
 
-    # Fonctions utilitaires pour dialog
-    def close_dialog(e=None):
-        alert_dialog.open = False
-        page.update()
-
     def show_dialog(msg: str):
         alert_dialog.content = ft.Text(msg)
         alert_dialog.actions = [
-            ft.TextButton("OK", on_click=close_dialog)
+            ft.TextButton("OK", on_click=lambda e: close_dialog())
         ]
         alert_dialog.open = True
         page.dialog = alert_dialog
         page.update()
 
+    def close_dialog():
+        alert_dialog.open = False
+        page.update()
+
     def lancer_test(e):
         if not url_field.value.strip():
-            return  # Ne rien faire si URL vide
+            return
+
+        result_table_http.rows.clear()
+        result_table_https.rows.clear()
 
         try:
             nb = int(nb_field.value)
         except:
-            return  # Ne rien faire si le nombre est invalide
+            return
 
-        result_table.rows.clear()
-
-        use_https = protocol_field.value == "HTTPS"
         url = url_field.value.strip()
 
         btn_test.disabled = True
@@ -74,10 +81,17 @@ def main(page: ft.Page):
         progress_ring.visible = True
         page.update()
 
-        resultats = mesurer_performance(url, use_https, nb)
+        resultats_http = mesurer_performance(url, use_https=False, num_requetes=nb)
+        resultats_https = mesurer_performance(url, use_https=True, num_requetes=nb)
 
-        for r in resultats:
-            result_table.rows.append(ft.DataRow(cells=[
+        historique_http.clear()
+        historique_https.clear()
+        historique_http.extend(resultats_http)
+        historique_https.extend(resultats_https)
+
+        for r in resultats_http:
+            result_table_http.rows.append(ft.DataRow(cells=[
+                ft.DataCell(ft.Text("HTTP")),
                 ft.DataCell(ft.Text(str(r["requete"]))),
                 ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
                 ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
@@ -85,8 +99,15 @@ def main(page: ft.Page):
                 ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
             ]))
 
-        historique.clear()
-        historique.extend(resultats)
+        for r in resultats_https:
+            result_table_https.rows.append(ft.DataRow(cells=[
+                ft.DataCell(ft.Text("HTTPS")),
+                ft.DataCell(ft.Text(str(r["requete"]))),
+                ft.DataCell(ft.Text(f"{r['latence']*1000:.2f}")),
+                ft.DataCell(ft.Text(f"{r['taille']/1024:.2f}")),
+                ft.DataCell(ft.Text(f"{r['debit']/1024:.2f}")),
+                ft.DataCell(ft.Text(f"{r['cpu']:.1f}"))
+            ]))
 
         btn_test.disabled = False
         btn_csv.disabled = False
@@ -94,19 +115,21 @@ def main(page: ft.Page):
         show_dialog("Test terminé avec succès !")
 
     def exporter_csv(e):
-        if not historique:
-            return  # Ne rien faire si pas de données
+        if not historique_http and not historique_https:
+            return
 
         btn_test.disabled = True
         btn_csv.disabled = True
         progress_ring.visible = True
         page.update()
 
-        with open("resultats_detail.csv", "w", newline='') as f:
+        with open("resultats_http_https.csv", "w", newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)"])
-            for r in historique:
-                writer.writerow([r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
+            writer.writerow(["Protocole", "Requête", "Latence (s)", "Taille (octets)", "Débit (o/s)", "CPU (%)"])
+            for r in historique_http:
+                writer.writerow(["HTTP", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
+            for r in historique_https:
+                writer.writerow(["HTTPS", r["requete"], r["latence"], r["taille"], r["debit"], r["cpu"]])
 
         btn_test.disabled = False
         btn_csv.disabled = False
@@ -118,12 +141,16 @@ def main(page: ft.Page):
 
     page.add(
         ft.Column([
-            ft.Text("🧪 Analyse des performances HTTP vs HTTPS", size=22, weight="bold"),
+            ft.Text("🧪 Analyse comparative HTTP vs HTTPS", size=22, weight="bold"),
             ft.Row([url_field]),
-            ft.Row([protocol_field, nb_field]),
+            ft.Row([nb_field]),
             ft.Row([btn_test, btn_csv, progress_ring]),
             ft.Divider(),
-            result_table,
+            ft.Text("Résultats HTTP", weight="bold"),
+            result_table_http,
+            ft.Divider(),
+            ft.Text("Résultats HTTPS", weight="bold"),
+            result_table_https,
         ])
     )
 

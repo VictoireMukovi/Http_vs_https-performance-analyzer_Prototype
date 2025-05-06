@@ -40,5 +40,5 @@ Elle permet d’analyser :
 
 1. Clone ce dépôt :
 ```bash
-git clone https://github.com/victoiremukovi/Http_vs_https-performance-analyzer_Prototype.git
+git clone https://github.com/VictoireMukovi/Http_vs_https-performance-analyzer_Prototype.git
 cd http-https-analyzer
